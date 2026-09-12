@@ -1,101 +1,110 @@
 # Summary of `finaltest_refactored.ipynb`
 
-This document provides a comprehensive report of the machine learning pipeline developed in `finaltest_refactored.ipynb`. The notebook focuses on **Indonesian Image Captioning**, setting up, training, and evaluating six different Vision-Encoder-Decoder models on the Flickr8k dataset translated into Indonesian.
+This document summarizes the latest version of `finaltest_refactored.ipynb`, which builds and evaluates an Indonesian image captioning pipeline using Flickr8k data.
 
 ## High-Level Overview
 
-The notebook accomplishes the following major tasks:
-1. **Setup & Initialization**: Global seeds are set for reproducibility. Directories for saving the various models are established. Common hyperparameters (Batch Size, Epochs, Learning Rate, etc.) are defined.
-2. **Data Cleaning & Noise Reduction**: Uses a custom statistical spell checker based on Peter Norvig's algorithm to correct typos and anomalies in the Indonesian captions. Fixes data leakage by ensuring all captions corresponding to a single image stay in the same split (Train 70% / Val 15% / Test 15%).
-3. **Data Loading & Preprocessing**: Sets up a custom PyTorch `Dataset` (`FlickrIndoDataset`) and `DataCollator` (`SmartDataCollator`). Uses Hugging Face's datasets, tokenizers, and image processors. A unified IndoNLG tokenizer is employed across all models for consistency.
-4. **Model Training**: It fine-tunes 6 different combinations of Vision Encoder-Decoder models. Early stopping is applied to prevent overfitting.
-   - **Models trained**:
-     - ViT + IndoBERT
-     - ViT + GPT2 (Indonesian)
-     - Swin Transformer + IndoBARTv2
-     - ViT + IndoBARTv2
-     - Swin Transformer + GPT2 (Indonesian)
-     - Swin Transformer + IndoBERT
-5. **Evaluation**: Evaluates the trained models comprehensively using the `pycocoevalcap` suite, computing metrics like BLEU (1-4), METEOR, ROUGE_L, CIDEr, and SPICE.
-6. **Inference & Visualization**: Generates captions for test images and displays them alongside ground truth. Evaluates model loss and BLEU scores, producing comparison charts saved as images.
+The notebook performs these major stages:
+1. **Environment setup and reproducibility**: Enables CUDA blocking debug mode, sets random seeds, defines global config, and creates output model directories.
+2. **Data cleaning and leakage-safe split**: Applies statistical typo correction and splits dataset by unique image names (70/15/15) to prevent caption leakage across splits.
+3. **Data inspection visuals**: Compares top-word distributions before/after cleaning and exports a typo-correction table.
+4. **Training utilities**: Defines dataset class, collator, BLEU metric computation, and training-history plotting.
+5. **Experiment management**: Shows shared hyperparameters and defines per-model experiment configs + logging.
+6. **Model training (6 variants)**: Fine-tunes six Vision-Encoder-Decoder combinations with early stopping.
+7. **Comprehensive evaluation**: Uses COCO-style metrics (BLEU-1..4, METEOR, ROUGE_L, CIDEr, SPICE) on unseen test data.
+8. **Inference and visual analysis**: Runs Swin+IndoBARTv2 inference and visualizes sample predictions and preprocessing behavior.
+9. **Tokenizer analysis**: Demonstrates IndoBERT tokenization on sampled captions.
 
 ---
 
 ## Detailed Cell-by-Cell Breakdown
 
-### Cell 1: Global Setup
-- Sets the global random seed for reproducibility (`random`, `numpy`, `torch`).
-- Defines a `Config` class containing paths (`IMAGE_DIR`, `CSV_FILE`), global hyperparameters (`BATCH_SIZE`, `EPOCHS`, `LEARNING_RATE`, `MAX_LENGTH`, `FP16`, `WEIGHT_DECAY`), and output directories for 6 different models.
-- Creates necessary subdirectories for saving model checkpoints.
+### Cell 1: Setup, Debug, and Global Config
+- Sets `CUDA_LAUNCH_BLOCKING=1` for synchronous CUDA error reporting.
+- Sets global random seeds (`random`, `numpy`, `torch`).
+- Defines `Config` (paths, shared hyperparameters, export directory).
+- Creates model output folders for all experiment variants.
 
-### Cell 2: Data Cleaning and Leakage Fix
-- Implements a statistical spell checker (Peter Norvig's approach) to correct typos in the dataset.
-- Cleans symbols, lowercases text, and replaces misspelled words.
-- Splits the dataset into Train (70%), Validation (15%), and Test (15%) splits based on **unique image names** rather than rows, which resolves data leakage issues (as Flickr8k has ~5 captions per image).
+### Cell 2: Statistical Noise Reduction + Leakage Fix
+- Loads metadata and builds a Norvig-style statistical spell-correction pipeline.
+- Cleans caption text (lowercase, symbol removal, whitespace normalization).
+- Collects typo-frequency stats for reporting.
+- Splits dataset by **unique image id/name** into train/val/test (70/15/15).
+- Verifies no overlap between image sets to ensure leakage is removed.
 
-### Cell 3: Data Cleaning Visualizations
-- Visualizes the top 15 words before and after cleaning using horizontal bar charts (`seaborn`).
-- Compiles a Pandas DataFrame displaying the top 10 typos and their corrections, saving it as a CSV file.
+### Cell 3: Cleaning Visualizations and Typo Table
+- Plots top 15 token frequencies before cleaning.
+- Plots top 15 token frequencies after cleaning.
+- Builds and displays top typo/correction table.
+- Exports typo table CSV and word-frequency plots.
 
-### Cell 4: Custom Dataset and Collator
-- Defines `FlickrIndoDataset` for loading image pixel values and tokenized caption labels.
-- Defines `SmartDataCollator` for batching features and generating `decoder_input_ids`.
-- Defines `compute_metrics_bleu` for evaluation during training using Hugging Face's `evaluate` library.
-- Defines a plotting function `plot_training_history` to display Loss and BLEU score progression.
+### Cell 4: Dataset, Collator, and BLEU Utilities
+- Defines `FlickrIndoDataset` for image-caption pairs.
+- Defines `SmartDataCollator` with decoder-input preparation.
+- Loads BLEU metric and defines `compute_metrics_bleu`.
+- Defines `plot_training_history` for training/validation loss and BLEU trends.
 
-### Cell 5: Hyperparameters Display
-- Displays a Pandas DataFrame summarizing the universal finetuning hyperparameters applied to all models.
+### Cell 5: Shared Hyperparameter Table
+- Displays common finetuning settings in tabular form (image size, max length, batch size, LR, epochs, beams, early stopping, etc.).
 
-### Cell 6: Experiment Configuration
-- Defines `EXPERIMENT_CONFIGS`, an object storing model-specific hyperparameters.
-- Defines `log_experiment()` to save the results and settings of each run into a JSON file.
-- Initializes the `UNIFIED_TOKENIZER` (`MBartTokenizer` from `indobenchmark/indobart-v2`), which is shared across all models.
+### Cell 6: Per-Model Experiment Configuration
+- Defines `EXPERIMENT_CONFIGS` for each model variant.
+- Sets early-stopping patience.
+- Implements experiment logging to JSON (hyperparameters, metrics, stop epoch).
+- Initializes unified tokenizer (`indobenchmark/indobart-v2`).
 
-### Cells 7 to 12: Model Training
-Each of these cells trains one specific model architecture. The workflow is largely identical across them:
-1. Initializes `AutoImageProcessor` and `VisionEncoderDecoderModel` from pre-trained weights.
-2. For GPT2 models, it applies `add_cross_attention=True` and `is_decoder=True`.
-3. Resizes token embeddings to match the unified tokenizer.
-4. Aligns special tokens (`pad_token_id`, `bos_token_id`, `eos_token_id`).
-5. Implements **Smart Freezing**: Freezes the entire encoder except for the last layer to preserve pre-trained visual representations while allowing some adaptation.
-6. Instantiates `Seq2SeqTrainingArguments` and `Seq2SeqTrainer` with `EarlyStoppingCallback`.
-7. Calls `trainer.train()`, plots the history, logs the experiment, and saves the weights.
+### Cells 7–12: Training Six Model Variants
+Each training cell follows the same pattern:
+- Loads encoder/decoder backbone pair.
+- Applies decoder adjustments for GPT2 variants.
+- Aligns tokenizer special tokens and generation config.
+- Uses smart-freezing strategy on encoder layers.
+- Trains via `Seq2SeqTrainer` + `EarlyStoppingCallback`.
+- Logs metrics/history and saves trained artifacts.
 
-- **Cell 7**: Trains `ViT` + `IndoBERT`.
-- **Cell 8**: Trains `ViT` + `GPT2` (small Indonesian).
-- **Cell 9**: Trains `Swin Transformer` + `IndoBARTv2`.
-- **Cell 10**: Trains `ViT` + `IndoBARTv2`.
-- **Cell 11**: Trains `Swin Transformer` + `GPT2` (small Indonesian).
-- **Cell 12**: Trains `Swin Transformer` + `IndoBERT`.
+Model mapping:
+- **Cell 7**: ViT + IndoBERT
+- **Cell 8**: ViT + GPT2 (Indonesian)
+- **Cell 9**: Swin + IndoBARTv2
+- **Cell 10**: ViT + IndoBARTv2
+- **Cell 11**: Swin + GPT2 (Indonesian)
+- **Cell 12**: Swin + IndoBERT
 
-### Cell 13: Comprehensive Evaluation
-- Evaluates all 6 models using the `pycocoevalcap` suite on the 15% unseen test data.
-- Handles edge cases where model configurations fail to load properly by reconstructing the architecture and loading `.safetensors`/`.bin` weights manually.
-- Uses Beam Search (`num_beams=4`) for caption generation.
-- Computes BLEU-1 to BLEU-4, METEOR, ROUGE_L, CIDEr, and SPICE.
-- Concatenates the results into a Pandas DataFrame and exports them to `comprehensive_metrics_comparison.csv`.
+### Cell 13: Integrated COCO-Style Evaluation
+- Loads all trained models.
+- Handles fallback loading when config is incomplete (rebuild + load weights manually).
+- Generates captions on test split with beam search.
+- Computes BLEU-1/2/3/4, METEOR, ROUGE_L, CIDEr, and SPICE.
+- Exports consolidated metrics comparison to CSV.
 
-### Cell 14: Final Inference (Swin + IndoBARTv2)
-- Performs bulk inference on the test dataset using the best-performing model (assumed to be `Swin + IndoBARTv2`).
-- Uses Beam Search to generate captions and appends them to a new column (`prediksi_swin_indobart`) in the test DataFrame.
-- Saves the inference results to a CSV file.
+### Cell 14: Bulk Inference with Best Model
+- Loads Swin + IndoBARTv2 from saved directory.
+- Runs caption generation for test data.
+- Writes predictions into `prediksi_swin_indobart` column.
+- Exports inference results to CSV.
 
-### Cell 15: Inference Visualization
-- Randomly samples 2 images from the test set where captions were successfully generated.
-- Plots the image alongside the predicted caption and the ground truth using `matplotlib`.
+### Cell 15: Inference Visualization (2 Samples)
+- Displays two test images with predicted caption and ground truth.
 
-### Cells 16 & 17: Preprocessing Illustration
-- Illustrates how the Swin Transformer processes an image.
-- Plots 1) the original image, 2) the image resized to a 224x224 tensor, and 3) an illustration of the patching mechanism (32x32 grids, representing the 4x4 patches with a 7x7 window).
+### Cell 16: Stepwise Preprocessing Illustration
+- Takes one random training image.
+- Shows original image and transformed 224x224 tensor view.
+- Reports size transformation details.
 
-### Cell 18: Tokenizer Demonstration
-- Demonstrates how the `IndoBERT` tokenizer breaks down 5 randomly sampled Indonesian captions into tokens and token IDs.
+### Cell 17: Combined Swin Preprocessing Plot
+- Creates a 3-panel visualization:
+  1. Original image
+  2. Processed 224x224 tensor
+  3. Patch-grid illustration used for Swin intuition
+- Saves combined figure to export directory.
 
-### Cell 19: Additional Inference Visualizations
-- Another visualization block displaying 3 random examples of the `Swin + IndoBARTv2` model predicting captions alongside their ground truth.
+### Cell 18: IndoBERT Tokenizer Demonstration
+- Tokenizes five sampled captions.
+- Displays original text, tokens, token IDs, and token counts.
+- Prints vocabulary size and special tokens.
 
-### Cells 20 & 21: Model Metric Plots
-- Hardcodes the loss and BLEU metrics for all 6 models over 7 epochs.
-- Plots **Training vs Validation Loss** for each of the 6 models in a 3x2 grid.
-- Plots the **Validation BLEU Score** for all 6 models on a single line chart for direct comparison.
-- Saves these final plots as `grafik_loss_evaluasi.png` and `grafik_bleu_evaluasi.png`.
+### Cell 19: Additional Inference Visualization (3 Samples)
+- Displays three random prediction examples from test data with ground-truth captions.
+
+### Cell 20: Empty Cell
+- The latest notebook currently ends with an empty final cell.
